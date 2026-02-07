@@ -35,6 +35,7 @@ jobs:
           texinfo \
           libdbus-1-dev \
           libglu1-mesa-dev \
+          libgl-dev \
           zlib1g-dev \
           m4
 
@@ -43,7 +44,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: deps/build/destdir
-        key: deps-linux-nogui-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
+        key: deps-linux-nogui-v2-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
 
     - name: Build dependencies
       if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -54,7 +55,7 @@ jobs:
           -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DDEP_WX_GTK3=OFF \
-          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|GLEW|OCCT|OpenCSG"
+          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|OCCT|OpenCSG"
         ninja -j $(nproc)
 
     - name: Configure PrusaSlicer
@@ -102,6 +103,7 @@ jobs:
           texinfo \
           libdbus-1-dev \
           libglu1-mesa-dev \
+          libgl-dev \
           zlib1g-dev \
           m4
 
@@ -110,7 +112,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: deps/build/destdir
-        key: deps-linux-nogui-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
+        key: deps-linux-nogui-v2-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
 
     - name: Build dependencies
       if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -121,7 +123,7 @@ jobs:
           -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DDEP_WX_GTK3=OFF \
-          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|GLEW|OCCT|OpenCSG"
+          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|OCCT|OpenCSG"
         ninja -j $(nproc)
 
     - name: Configure PrusaSlicer with LTO
