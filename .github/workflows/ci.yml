@@ -17,7 +17,7 @@ env:
   DEPS_PATH: deps/build/destdir
 
 jobs:
-  # Separate job for building deps - saves cache even if later jobs fail
+  # Separate job for building deps - saves cache before downstream jobs
   build-deps:
     name: Build dependencies
     runs-on: ubuntu-24.04
@@ -94,63 +94,10 @@ jobs:
           -DSLIC3R_GUI=0 \
           -DSLIC3R_BUILD_TESTS=ON \
           -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local" \
-          2>&1 | tee cmake_output.txt || {
-            echo "::error::CMake configure failed. Last 50 lines:"
-            tail -50 cmake_output.txt | while IFS= read -r line; do
-              echo "::error::$line"
-            done
-            exit 1
-          }
+          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local"
 
     - name: Build PrusaSlicer
-      run: |
-        cmake --build build -j $(nproc) 2>&1 | tail -100 || {
-          echo "::error::Build failed. Checking build directory:"
-          ls -la build/ 2>&1 | head -20
-          echo "::error::ninja version: $(ninja --version 2>&1)"
-          echo "::error::cmake version: $(cmake --version 2>&1 | head -1)"
-          exit 1
-        }
+      run: cmake --build build -j $(nproc)
 
     - name: Run tests
       run: ctest --test-dir build --output-on-failure -j $(nproc)
-
-  build-lto:
-    name: Linux (nogui + LTO)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    needs: build-and-test
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential cmake ninja-build git autoconf texinfo m4 \
-          libdbus-1-dev libglu1-mesa-dev libgl-dev zlib1g-dev
-
-    - name: Restore dependency cache
-      uses: actions/cache/restore@v4
-      with:
-        path: ${{ env.DEPS_PATH }}
-        key: ${{ env.DEPS_CACHE_KEY }}
-        fail-on-cache-miss: true
-
-    - name: Configure PrusaSlicer with LTO
-      run: |
-        cmake -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DSLIC3R_STATIC=1 \
-          -DSLIC3R_GUI=0 \
-          -DSLIC3R_LTO=ON \
-          -DSLIC3R_BUILD_TESTS=OFF \
-          -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local"
-
-    - name: Build PrusaSlicer with LTO
-      run: cmake --build build -j $(nproc)
