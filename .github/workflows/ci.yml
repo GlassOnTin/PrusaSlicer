@@ -94,7 +94,14 @@ jobs:
           -DSLIC3R_GUI=0 \
           -DSLIC3R_BUILD_TESTS=ON \
           -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local"
+          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local" \
+          2>&1 | tee cmake_output.txt || {
+            echo "::error::CMake configure failed. Last 50 lines:"
+            tail -50 cmake_output.txt | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          }
 
     - name: Build PrusaSlicer
       run: cmake --build build -j $(nproc)
