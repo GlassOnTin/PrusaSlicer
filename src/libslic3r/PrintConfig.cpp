@@ -54,7 +54,10 @@ static t_config_enum_names enum_names_from_keys_map(const t_config_enum_values &
     cnt += 1;
     names.assign(cnt, "");
     for (const auto& kvp : enum_keys_map)
-        names[kvp.second] = kvp.first;
+        // Only assign if slot is empty, so first alphabetical name wins
+        // when multiple aliases map to the same enum value.
+        if (names[kvp.second].empty())
+            names[kvp.second] = kvp.first;
     return names;
 }
 

@@ -338,6 +338,8 @@ set(SLIC3R_SOURCES
     ShortEdgeCollapse.hpp
     ShortestPath.cpp
     ShortestPath.hpp
+    TravelOptimization.cpp
+    TravelOptimization.hpp
     SLAPrint.cpp
     SLAPrintSteps.cpp
     SLAPrintSteps.hpp

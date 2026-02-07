@@ -9,6 +9,12 @@
 #/|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
 #/|/
 cmake_minimum_required(VERSION 3.13)
+
+# CMake 4.x compatibility: set CMP0177 to avoid warnings about default install prefix behavior.
+if(POLICY CMP0177)
+    cmake_policy(SET CMP0177 NEW)
+endif()
+
 project(PrusaSlicer)
 
 include("version.inc")
@@ -40,6 +46,7 @@ option(SLIC3R_PCH               "Use precompiled headers" 1)
 option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 option(SLIC3R_ASAN              "Enable ASan on Clang and GCC" 0)
 option(SLIC3R_UBSAN             "Enable UBSan on Clang and GCC" 0)
+option(SLIC3R_LTO               "Enable Link-Time Optimization for Release builds" OFF)
 option(SLIC3R_ENABLE_FORMAT_STEP "Enable compilation of STEP file support" ON)
 option(SLIC3R_LOG_TO_FILE       "Enable logging into file")
 option(SLIC3R_REPO_URL          "Preset repo URL")
@@ -183,6 +190,19 @@ enable_testing ()
 # Enable C++17 language standard.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Link-Time Optimization for Release builds.
+if (SLIC3R_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _lto_supported OUTPUT _lto_error)
+    if (_lto_supported)
+        message(STATUS "LTO enabled for Release builds")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+    else()
+        message(WARNING "LTO requested but not supported: ${_lto_error}")
+    endif()
+endif()
 
 if(NOT WIN32)
     # Add DEBUG flags to debug builds.
@@ -570,7 +590,12 @@ endif ()
 
 find_package(OpenVDB 5.0 COMPONENTS openvdb)
 if(OpenVDB_FOUND)
-    slic3r_remap_configs(IlmBase::Half RelWithDebInfo Release)
+    # OpenEXR 3.x uses Imath::Imath; older versions use IlmBase::Half
+    if (TARGET Imath::Imath)
+        slic3r_remap_configs(Imath::Imath RelWithDebInfo Release)
+    elseif (TARGET IlmBase::Half)
+        slic3r_remap_configs(IlmBase::Half RelWithDebInfo Release)
+    endif()
     slic3r_remap_configs(Blosc::blosc RelWithDebInfo Release)
 else ()
     message(FATAL_ERROR "OpenVDB could not be found with the bundled find module. "

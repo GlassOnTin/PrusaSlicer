@@ -141,19 +141,42 @@ std::vector<Perimeter> extract_perimeter_extrusions(
     return result;
 }
 
+// Group fills by ExtrusionRole to ensure proper printing order
+// (e.g., interlocking before regular infill, solid infill before sparse).
+// Within each role group, fills are chained by nearest-neighbor for travel optimization.
 std::vector<ExtrusionEntityReference> sort_fill_extrusions(const ExtrusionEntitiesPtr &fills, const Point* start_near) {
     if (fills.empty()) {
         return {};
     }
-    std::vector<ExtrusionEntityReference> sorted_extrusions;
 
-    for (const ExtrusionEntityReference &fill : chain_extrusion_references(fills, start_near)) {
-        if (auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(&fill.extrusion_entity()); eec) {
-            for (const ExtrusionEntityReference &ee : chain_extrusion_references(*eec, start_near, fill.flipped())) {
-                sorted_extrusions.push_back(ee);
+    // Group fills by GCodeExtrusionRole for proper ordering
+    std::map<GCodeExtrusionRole, ExtrusionEntitiesPtr> fills_by_role;
+    for (ExtrusionEntity *fill : fills) {
+        GCodeExtrusionRole gcode_role = extrusion_role_to_gcode_extrusion_role(fill->role());
+        fills_by_role[gcode_role].push_back(fill);
+    }
+
+    // Process each role group in enum order (map automatically sorts by key)
+    std::vector<ExtrusionEntityReference> sorted_extrusions;
+    const Point *current_position = start_near;
+    Point last_point;
+
+    for (auto &[role, role_fills] : fills_by_role) {
+        // Chain extrusions within this role group for travel optimization
+        for (const ExtrusionEntityReference &fill : chain_extrusion_references(role_fills, current_position)) {
+            if (auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(&fill.extrusion_entity()); eec) {
+                for (const ExtrusionEntityReference &ee : chain_extrusion_references(*eec, current_position, fill.flipped())) {
+                    sorted_extrusions.push_back(ee);
+                    // Update position to end of this extrusion for next chain
+                    last_point = ee.extrusion_entity().last_point();
+                    current_position = &last_point;
+                }
+            } else {
+                sorted_extrusions.push_back(fill);
+                // Update position to end of this extrusion for next chain
+                last_point = fill.extrusion_entity().last_point();
+                current_position = &last_point;
             }
-        } else {
-            sorted_extrusions.push_back(fill);
         }
     }
     return sorted_extrusions;

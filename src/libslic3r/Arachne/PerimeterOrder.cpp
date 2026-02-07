@@ -162,6 +162,7 @@ struct GroupedPerimeterExtrusions
 };
 
 // Returns vector of indexes that represent the order of grouped extrusions in grouped_extrusions.
+// Uses nearest-neighbor heuristic followed by 2-opt local optimization to reduce travel distances.
 static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_distances(const std::vector<GroupedPerimeterExtrusions> &grouped_extrusions, Point current_position) {
     std::vector<size_t> grouped_extrusions_sorted_indices(grouped_extrusions.size());
     std::iota(grouped_extrusions_sorted_indices.begin(), grouped_extrusions_sorted_indices.end(), 0);
@@ -178,8 +179,40 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
         return !grouped_extrusions.external_perimeter_extrusion->is_contour();
     });
 
+    // Instead of starting from origin (which is often far from all perimeters),
+    // calculate the centroid of all group start positions for better initial ordering.
+    auto calculate_centroid = [&](size_t start_idx, size_t end_idx) -> Point {
+        if (start_idx >= end_idx)
+            return current_position;
+        int64_t sum_x = 0, sum_y = 0;
+        size_t  count = 0;
+        for (size_t i = start_idx; i < end_idx; ++i) {
+            size_t       idx = grouped_extrusions_sorted_indices[i];
+            const Point &p   = grouped_extrusions[idx].external_perimeter_extrusion->extrusion.junctions.front().p;
+            sum_x += p.x();
+            sum_y += p.y();
+            ++count;
+        }
+        if (count == 0)
+            return current_position;
+        return Point(static_cast<coord_t>(sum_x / count), static_cast<coord_t>(sum_y / count));
+    };
+
+    // Helper to get squared travel distance between end of group A and start of group B
+    auto get_travel_distance_sqr = [&](size_t from_idx, size_t to_idx) -> double {
+        const Point &end_pos   = get_end_position(grouped_extrusions[from_idx].extrusions.back()->extrusion);
+        const Point &start_pos = grouped_extrusions[to_idx].external_perimeter_extrusion->extrusion.junctions.front().p;
+        return (end_pos - start_pos).cast<double>().squaredNorm();
+    };
+
     std::vector<size_t> grouped_extrusions_order;
     std::vector<bool>   already_selected(grouped_extrusions.size(), false);
+
+    // For holes phase, use centroid of holes as starting point.
+    if (holes_cnt > 0) {
+        current_position = calculate_centroid(0, holes_cnt);
+    }
+
     while (grouped_extrusions_order.size() < grouped_extrusions.size()) {
         double nearest_distance_sqr           = std::numeric_limits<double>::max();
         size_t nearest_grouped_extrusions_idx = 0;
@@ -187,6 +220,12 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
 
         // First we order all holes and then we start ordering contours.
         const size_t grouped_extrusions_sorted_indices_end = (grouped_extrusions_order.size() < holes_cnt) ? holes_cnt : grouped_extrusions_sorted_indices.size();
+
+        if (grouped_extrusions_order.size() == holes_cnt && holes_cnt < grouped_extrusions.size()) {
+            // Switching from holes to contours - use centroid of contours as reference
+            current_position = calculate_centroid(holes_cnt, grouped_extrusions_sorted_indices.size());
+        }
+
         for (size_t grouped_extrusions_sorted_idx = 0; grouped_extrusions_sorted_idx < grouped_extrusions_sorted_indices_end; ++grouped_extrusions_sorted_idx) {
             const size_t grouped_extrusion_idx = grouped_extrusions_sorted_indices[grouped_extrusions_sorted_idx];
             if (already_selected[grouped_extrusion_idx])
@@ -210,6 +249,62 @@ static std::vector<size_t> order_of_grouped_perimeter_extrusions_to_minimize_dis
         const GroupedPerimeterExtrusions &nearest_grouped_extrusions = grouped_extrusions[nearest_grouped_extrusions_idx];
         const ExtrusionLine              &last_extrusion_line        = nearest_grouped_extrusions.extrusions.back()->extrusion;
         current_position                                             = get_end_position(last_extrusion_line);
+    }
+
+    // 2-opt local optimization: iteratively reverse segments to remove crossing paths.
+    // Applied separately to holes and contours to maintain holes-first ordering.
+    auto apply_2opt = [&](size_t start, size_t end) {
+        if (end - start < 3)
+            return; // Need at least 3 elements for 2-opt to matter
+
+        bool improved      = true;
+        int  max_iterations = static_cast<int>((end - start) * 3);
+        while (improved && max_iterations-- > 0) {
+            improved = false;
+            for (size_t i = start; i < end - 1; ++i) {
+                for (size_t j = i + 2; j < end; ++j) {
+                    // Calculate current distance
+                    double current_dist = 0;
+                    if (i > start) {
+                        current_dist += get_travel_distance_sqr(grouped_extrusions_order[i - 1],
+                                                                grouped_extrusions_order[i]);
+                    }
+                    current_dist += get_travel_distance_sqr(grouped_extrusions_order[j - 1],
+                                                            grouped_extrusions_order[j]);
+                    if (j + 1 < end) {
+                        current_dist += get_travel_distance_sqr(grouped_extrusions_order[j],
+                                                                grouped_extrusions_order[j + 1]);
+                    }
+
+                    // Calculate distance after reversing segment [i, j]
+                    double new_dist = 0;
+                    if (i > start) {
+                        new_dist += get_travel_distance_sqr(grouped_extrusions_order[i - 1],
+                                                            grouped_extrusions_order[j]);
+                    }
+                    new_dist += get_travel_distance_sqr(grouped_extrusions_order[i],
+                                                        grouped_extrusions_order[j - 1]);
+                    if (j + 1 < end) {
+                        new_dist += get_travel_distance_sqr(grouped_extrusions_order[i],
+                                                            grouped_extrusions_order[j + 1]);
+                    }
+
+                    if (new_dist < current_dist * 0.99) { // 1% improvement threshold
+                        std::reverse(grouped_extrusions_order.begin() + i,
+                                     grouped_extrusions_order.begin() + j + 1);
+                        improved = true;
+                    }
+                }
+            }
+        }
+    };
+
+    // Apply 2-opt separately to holes and contours
+    if (holes_cnt >= 3) {
+        apply_2opt(0, holes_cnt);
+    }
+    if (grouped_extrusions.size() - holes_cnt >= 3) {
+        apply_2opt(holes_cnt, grouped_extrusions.size());
     }
 
     return grouped_extrusions_order;
@@ -253,7 +348,8 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
             } else if (available_candidates.size() > 1) {
                 // When there is more than one available candidate, then order candidates to minimize distances between
                 // candidates and also to minimize the distance from the current_position.
-                std::vector<const PerimeterExtrusion *> adjacent_extrusions = ordered_perimeter_extrusions_to_minimize_distances(Point::Zero(), available_candidates);
+                const Point current_end_position = get_end_position(current_extrusion->extrusion);
+                std::vector<const PerimeterExtrusion *> adjacent_extrusions = ordered_perimeter_extrusions_to_minimize_distances(current_end_position, available_candidates);
                 for (auto extrusion_it = adjacent_extrusions.rbegin(); extrusion_it != adjacent_extrusions.rend(); ++extrusion_it) {
                     stack.push(*extrusion_it);
                 }
