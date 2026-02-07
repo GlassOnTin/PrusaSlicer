@@ -12,11 +12,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DEPS_CACHE_KEY: deps-linux-nogui-v3-${{ github.repository }}
+  DEPS_PATH: deps/build/destdir
+
 jobs:
-  build-linux-nogui:
-    name: Linux (nogui + tests)
+  # Separate job for building deps - saves cache even if later jobs fail
+  build-deps:
+    name: Build dependencies
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v4
@@ -27,24 +32,15 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          cmake \
-          ninja-build \
-          git \
-          autoconf \
-          texinfo \
-          libdbus-1-dev \
-          libglu1-mesa-dev \
-          libgl-dev \
-          zlib1g-dev \
-          m4
+          build-essential cmake ninja-build git autoconf texinfo m4 \
+          libdbus-1-dev libglu1-mesa-dev libgl-dev zlib1g-dev
 
-    - name: Cache dependencies
+    - name: Restore dependency cache
       id: cache-deps
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
-        path: deps/build/destdir
-        key: deps-linux-nogui-v2-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
+        path: ${{ env.DEPS_PATH }}
+        key: ${{ env.DEPS_CACHE_KEY }}
 
     - name: Build dependencies
       if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -55,49 +51,62 @@ jobs:
           -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DDEP_WX_GTK3=OFF \
-          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|OCCT|OpenCSG"
-        ninja -j $(nproc)
+          "-DPrusaSlicer_deps_PACKAGE_EXCLUDES=wxWidgets|OCCT|OpenCSG"
+        cmake --build . -j $(nproc)
+
+    - name: Save dependency cache
+      if: steps.cache-deps.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.DEPS_PATH }}
+        key: ${{ env.DEPS_CACHE_KEY }}
+
+  build-and-test:
+    name: Linux (nogui + tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: build-deps
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake ninja-build git autoconf texinfo m4 \
+          libdbus-1-dev libglu1-mesa-dev libgl-dev zlib1g-dev
+
+    - name: Restore dependency cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ env.DEPS_PATH }}
+        key: ${{ env.DEPS_CACHE_KEY }}
+        fail-on-cache-miss: true
 
     - name: Configure PrusaSlicer
       run: |
-        mkdir -p build && cd build
-        cmake .. \
-          -G Ninja \
+        cmake -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DSLIC3R_STATIC=1 \
           -DSLIC3R_GUI=0 \
           -DSLIC3R_BUILD_TESTS=ON \
           -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/../deps/build/destdir/usr/local" \
-          2>&1 || {
-            echo "::group::CMake error log"
-            cat CMakeFiles/CMakeError.log 2>/dev/null || true
-            echo "::endgroup::"
-            echo "::group::CMake output log"
-            cat CMakeFiles/CMakeOutput.log 2>/dev/null || true
-            echo "::endgroup::"
-            echo "::group::Deps directory contents"
-            ls -la ../deps/build/destdir/usr/local/lib/cmake/ 2>/dev/null || true
-            ls -la ../deps/build/destdir/usr/local/lib/ 2>/dev/null || true
-            echo "::endgroup::"
-            exit 1
-          }
+          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local"
 
     - name: Build PrusaSlicer
-      run: |
-        cd build
-        ninja -j $(nproc)
+      run: cmake --build build -j $(nproc)
 
     - name: Run tests
-      run: |
-        cd build
-        ctest --output-on-failure -j $(nproc)
+      run: ctest --test-dir build --output-on-failure -j $(nproc)
 
-  build-linux-nogui-lto:
+  build-lto:
     name: Linux (nogui + LTO)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    needs: build-linux-nogui
+    timeout-minutes: 45
+    needs: build-and-test
 
     steps:
     - uses: actions/checkout@v4
@@ -108,51 +117,26 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          cmake \
-          ninja-build \
-          git \
-          autoconf \
-          texinfo \
-          libdbus-1-dev \
-          libglu1-mesa-dev \
-          libgl-dev \
-          zlib1g-dev \
-          m4
+          build-essential cmake ninja-build git autoconf texinfo m4 \
+          libdbus-1-dev libglu1-mesa-dev libgl-dev zlib1g-dev
 
-    - name: Cache dependencies
-      id: cache-deps
-      uses: actions/cache@v4
+    - name: Restore dependency cache
+      uses: actions/cache/restore@v4
       with:
-        path: deps/build/destdir
-        key: deps-linux-nogui-v2-${{ hashFiles('deps/+*/**.cmake', 'deps/CMakeLists.txt', 'deps/CMakePresets.json') }}
-
-    - name: Build dependencies
-      if: steps.cache-deps.outputs.cache-hit != 'true'
-      run: |
-        cd deps
-        mkdir -p build && cd build
-        cmake .. \
-          -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DDEP_WX_GTK3=OFF \
-          -DPrusaSlicer_deps_PACKAGE_EXCLUDES="wxWidgets|OCCT|OpenCSG"
-        ninja -j $(nproc)
+        path: ${{ env.DEPS_PATH }}
+        key: ${{ env.DEPS_CACHE_KEY }}
+        fail-on-cache-miss: true
 
     - name: Configure PrusaSlicer with LTO
       run: |
-        mkdir -p build && cd build
-        cmake .. \
-          -G Ninja \
+        cmake -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DSLIC3R_STATIC=1 \
           -DSLIC3R_GUI=0 \
           -DSLIC3R_LTO=ON \
           -DSLIC3R_BUILD_TESTS=OFF \
           -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/../deps/build/destdir/usr/local"
+          -DCMAKE_PREFIX_PATH="$(pwd)/deps/build/destdir/usr/local"
 
     - name: Build PrusaSlicer with LTO
-      run: |
-        cd build
-        ninja -j $(nproc)
+      run: cmake --build build -j $(nproc)
