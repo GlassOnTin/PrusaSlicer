@@ -68,7 +68,20 @@ jobs:
           -DSLIC3R_GUI=0 \
           -DSLIC3R_BUILD_TESTS=ON \
           -DSLIC3R_ENABLE_FORMAT_STEP=OFF \
-          -DCMAKE_PREFIX_PATH="$(pwd)/../deps/build/destdir/usr/local"
+          -DCMAKE_PREFIX_PATH="$(pwd)/../deps/build/destdir/usr/local" \
+          2>&1 || {
+            echo "::group::CMake error log"
+            cat CMakeFiles/CMakeError.log 2>/dev/null || true
+            echo "::endgroup::"
+            echo "::group::CMake output log"
+            cat CMakeFiles/CMakeOutput.log 2>/dev/null || true
+            echo "::endgroup::"
+            echo "::group::Deps directory contents"
+            ls -la ../deps/build/destdir/usr/local/lib/cmake/ 2>/dev/null || true
+            ls -la ../deps/build/destdir/usr/local/lib/ 2>/dev/null || true
+            echo "::endgroup::"
+            exit 1
+          }
 
     - name: Build PrusaSlicer
       run: |
