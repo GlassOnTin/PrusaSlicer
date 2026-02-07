@@ -166,20 +166,24 @@ size_t remove_collinear_points(Points &points, bool is_closed, double tolerance_
         if (unique_points < 4) // Triangle or smaller
             return 0;
 
+        // last_unique is the index of the last unique vertex
+        // For polygons without closing duplicate: n - 1
+        // For polygons with closing duplicate: n - 2
+        size_t last_unique = unique_points - 1;
+
         std::vector<bool> to_remove(n, false);
 
-        for (size_t i = 0; i < n; ++i) {
+        for (size_t i = 0; i <= last_unique; ++i) {
             if (unique_points - removed <= 3)
                 break;
 
-            // Skip the closing point
-            if (i == n - 1 && points[i] == points[0])
+            // Skip the closing point (only present if has_closing_point)
+            if (has_closing_point && i == n - 1)
                 continue;
 
-            size_t prev = (i == 0) ? n - 2 : i - 1;
-            size_t next = (i == n - 2) ? 0 : i + 1;
-            if (next == n - 1 && points[next] == points[0])
-                next = 0;
+            // Wrap around within unique vertices only
+            size_t prev = (i == 0) ? last_unique : i - 1;
+            size_t next = (i == last_unique) ? 0 : i + 1;
 
             if (is_collinear(points[prev], points[i], points[next], tolerance_sq)) {
                 to_remove[i] = true;
@@ -194,7 +198,9 @@ size_t remove_collinear_points(Points &points, bool is_closed, double tolerance_
                 if (!to_remove[i])
                     new_points.push_back(points[i]);
             }
-            if (!new_points.empty() && new_points.front() != new_points.back())
+            // Only re-add closing point if the input had one
+            // (Slic3r Polygon stores unique vertices without closing duplicate)
+            if (has_closing_point && !new_points.empty() && new_points.front() != new_points.back())
                 new_points.push_back(new_points.front());
             points = std::move(new_points);
         }
