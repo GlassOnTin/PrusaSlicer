@@ -104,7 +104,14 @@ jobs:
           }
 
     - name: Build PrusaSlicer
-      run: cmake --build build -j $(nproc)
+      run: |
+        cmake --build build -j $(nproc) 2>&1 | tail -100 || {
+          echo "::error::Build failed. Checking build directory:"
+          ls -la build/ 2>&1 | head -20
+          echo "::error::ninja version: $(ninja --version 2>&1)"
+          echo "::error::cmake version: $(cmake --version 2>&1 | head -1)"
+          exit 1
+        }
 
     - name: Run tests
       run: ctest --test-dir build --output-on-failure -j $(nproc)
